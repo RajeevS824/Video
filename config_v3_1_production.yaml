@@ -1,0 +1,450 @@
+#############################################################
+# ENTERPRISE AUDIO PIPELINE v3.1
+# PRODUCTION CONFIGURATION - ALL 10 FIXES ENABLED
+#############################################################
+
+############################################################
+# AUDIO PROCESSING CONSTRAINTS
+############################################################
+
+audio:
+  max_duration_sec: 60
+  max_file_size_mb: 500
+  sample_rate: 16000
+  channels: 1
+  codec: "pcm_s16le"
+  # FIX #1: Streaming upload chunk size
+  chunk_size_bytes: 1048576  # 1MB chunks
+
+############################################################
+# QUALITY THRESHOLDS
+############################################################
+
+quality:
+  dnsmos:
+    pass_threshold: 3.6
+    enhance_threshold: 3.1
+    min_scores_required: 1
+  
+  speech_ratio:
+    threshold: 0.45
+  
+  confidence:
+    min_valid: 0.3
+  
+  hallucination:
+    threshold: 0.32
+
+############################################################
+# MODEL PATHS & CONFIGURATIONS
+############################################################
+
+models:
+  whisper:
+    name: "base"
+    device: "cpu"
+    compute_type: "int8"
+    beam_size: 10
+    temperature: 0
+    log_prob_threshold: -1
+  
+  semantic:
+    name: "all-MiniLM-L6-v2"
+  
+  vad:
+    source: "snakers4/silero-vad"
+    name: "silero_vad"
+    force_reload: false
+  
+  dnsmos:
+    path: "sig_bak_ovr.onnx"
+
+############################################################
+# ENHANCEMENT SETTINGS
+############################################################
+
+enhancement:
+  enabled: true
+  method: "demucs"
+  stem: "vocals"
+  output_dir: "enhanced_output"
+  # FIX #2: Subprocess timeout
+  timeout_sec: 30
+
+############################################################
+# LATENCY SLA
+############################################################
+
+latency_sla:
+  max_inference_sec: 15
+  max_extraction_sec: 5
+  max_enhancement_sec: 10
+  # FIX #2: Explicit subprocess timeout
+  subprocess_timeout_sec: 30
+
+############################################################
+# RETRY POLICY
+############################################################
+
+retry:
+  max_attempts: 3
+  base_delay_sec: 1.5
+  backoff_multiplier: 1.5
+  max_delay_sec: 10.0
+
+############################################################
+# THREADING & CONCURRENCY (FIX #3)
+############################################################
+
+threading:
+  # FIX #3: Dynamic worker count (null = auto-calculate)
+  max_workers: null
+  min_workers: 2
+  max_workers_limit: 32
+  
+  # Queue settings (FIX #9)
+  queue_enabled: true
+  queue_backend: "redis"  # or "kafka", "memory"
+  queue_max_size: 1000
+
+############################################################
+# RATE LIMITING (FIX #5)
+############################################################
+
+rate_limiting:
+  enabled: true
+  requests_per_minute: 60
+  requests_per_hour: 1000
+  per_ip: true
+  per_user: true
+  burst_allowed: 10
+
+############################################################
+# CIRCUIT BREAKER (FIX #7)
+############################################################
+
+circuit_breaker:
+  enabled: true
+  failure_threshold: 5  # Failures before open
+  recovery_timeout_sec: 60  # Time before attempting recovery
+  
+  # Per-component
+  model_service:
+    enabled: true
+    threshold: 5
+  
+  enhancement_service:
+    enabled: true
+    threshold: 5
+  
+  database_service:
+    enabled: true
+    threshold: 10
+
+############################################################
+# SUBPROCESS EXECUTION (FIX #2)
+############################################################
+
+subprocess:
+  timeout_sec: 30
+  max_retries: 3
+  log_output: true
+  log_errors: true
+  capture_stderr: true
+
+############################################################
+# LOGGING & MONITORING (FIX #6)
+############################################################
+
+logging:
+  level: "INFO"
+  format: "%(asctime)s | %(name)s | %(levelname)s | %(message)s"
+  request_id_header: "X-Request-ID"
+  # FIX #6: Prevent duplicate handlers
+  prevent_duplicate_handlers: true
+  max_handlers_per_logger: 1
+
+metrics:
+  enabled: true
+  prometheus_port: 8000
+  cloudwatch_enabled: false
+  cloudwatch_namespace: "AudioPipeline"
+  cloudwatch_region: "us-east-1"
+
+############################################################
+# REDIS QUEUE (FIX #9)
+############################################################
+
+redis:
+  enabled: true
+  host: "localhost"
+  port: 6379
+  db: 0
+  password: null
+  ssl: false
+  
+  # Queue configuration
+  queue_name: "audio_jobs"
+  worker_queue_name: "audio_jobs_processing"
+  result_queue_name: "audio_results"
+  
+  # Timeouts
+  connection_timeout_sec: 5
+  queue_timeout_sec: 300  # 5 minutes
+  
+  # Persistence
+  enable_persistence: true
+  persistence_dir: "/var/lib/redis"
+
+############################################################
+# KAFKA QUEUE (Alternative to Redis)
+############################################################
+
+kafka:
+  enabled: false
+  brokers:
+    - "localhost:9092"
+  
+  topic_jobs: "audio-jobs"
+  topic_results: "audio-results"
+  
+  # Consumer settings
+  group_id: "audio-pipeline-workers"
+  auto_offset_reset: "earliest"
+
+############################################################
+# SEMANTIC GROUNDING
+############################################################
+
+semantic:
+  corpus:
+    - "personal storytelling speech"
+    - "narrative spoken english practice"
+    - "human learning experience narration"
+    - "english language learning conversation"
+    - "spoken motivational explanation"
+    - "simple english learning story"
+    - "first person speech narration"
+  
+  similarity_threshold: 0.32
+
+############################################################
+# VALIDATION & SECURITY (FIX #10)
+############################################################
+
+validation:
+  enabled: true
+  
+  # FIX #10: Required configuration keys
+  required_keys:
+    - "models.whisper.name"
+    - "audio.max_duration_sec"
+    - "quality.dnsmos.pass_threshold"
+    - "latency_sla.max_inference_sec"
+    - "deployment.workers"
+  
+  allowed_formats:
+    - ".mp4"
+    - ".mov"
+    - ".avi"
+    - ".mkv"
+    - ".flv"
+    - ".webm"
+  
+  allowed_mime_types:
+    - "video/mp4"
+    - "video/quicktime"
+    - "video/x-msvideo"
+    - "video/x-matroska"
+    - "video/x-flv"
+    - "video/webm"
+  
+  virus_scan:
+    enabled: false
+    api_endpoint: "https://www.virustotal.com/api/v3/files"
+    timeout_sec: 30
+
+############################################################
+# CLEANUP
+############################################################
+
+cleanup:
+  delete_temp_files: true
+  temp_dir: "/tmp/audio_pipeline"
+  preserve_on_error: false
+  
+  # Auto-cleanup old files
+  auto_cleanup_enabled: true
+  auto_cleanup_age_hours: 24
+  auto_cleanup_interval_hours: 1
+
+############################################################
+# DEPLOYMENT (FIX #8: Single Worker CRITICAL)
+############################################################
+
+deployment:
+  # FIX #8: CRITICAL - Must be 1
+  # Scale using Kubernetes/load balancer instead
+  fastapi_port: 8001
+  workers: 1  # !! NEVER USE >1 WITH MODEL LOADING !!
+  max_concurrent_requests: 10
+  request_timeout_sec: 60
+  
+  # Worker service (separate from API)
+  worker_enabled: true
+  worker_count: 4  # Separate worker processes
+  worker_concurrency: 2  # Per worker
+
+############################################################
+# DEMUCS OUTPUT (FIX #4: Deterministic Parsing)
+############################################################
+
+demucs:
+  # Deterministic output path resolution (FIX #4)
+  output_dir: "enhanced_output"
+  timeout_sec: 30
+  
+  # Model
+  model: "htdemucs"
+  stem: "vocals"
+  
+  # Safety
+  validate_output: true
+  max_output_files: 10  # Prevent accumulation
+
+############################################################
+# PERFORMANCE TUNING
+############################################################
+
+performance:
+  # Connection pooling
+  db_pool_size: 10
+  db_max_overflow: 20
+  
+  # Cache
+  cache_enabled: true
+  cache_ttl_sec: 3600
+  
+  # Batch processing
+  batch_enabled: true
+  batch_size: 5
+  batch_timeout_sec: 60
+
+############################################################
+# TESTING & DEBUG
+############################################################
+
+testing:
+  enabled: false
+  # When enabled, use mock models (faster for testing)
+  use_mock_models: false
+  mock_latency_sec: 2
+
+debug:
+  enabled: false
+  verbose_logging: false
+  save_intermediate_files: false
+  # Intermediate file locations:
+  intermediate_dir: "/tmp/audio_debug"
+
+############################################################
+# HEALTH CHECKS
+############################################################
+
+health_checks:
+  enabled: true
+  interval_sec: 30
+  
+  checks:
+    models_loaded: true
+    redis_connected: true
+    disk_space_available: true
+    memory_available: true
+  
+  # Thresholds
+  min_disk_space_gb: 5
+  min_memory_percent: 10
+
+############################################################
+# ALERTS & THRESHOLDS
+############################################################
+
+alerts:
+  enabled: true
+  
+  # High latency
+  latency_warning_sec: 12
+  latency_critical_sec: 14
+  
+  # High error rate
+  error_rate_warning: 0.05  # 5%
+  error_rate_critical: 0.10  # 10%
+  
+  # Queue depth
+  queue_warning: 50
+  queue_critical: 100
+  
+  # Model service issues
+  model_load_timeout_warning_sec: 30
+  model_load_timeout_critical_sec: 60
+
+############################################################
+# SUMMARY OF ALL 10 FIXES
+############################################################
+
+# FIX #1: STREAMING FILE UPLOAD
+#   - Load video in 1MB chunks instead of all at once
+#   - Prevents memory bloat on large files
+#   - Config: audio.chunk_size_bytes
+
+# FIX #2: SUBPROCESS TIMEOUT + ERROR HANDLING
+#   - Explicit timeout for ffmpeg, demucs, etc.
+#   - Capture and log stderr for debugging
+#   - Automatic retry with backoff
+#   - Config: latency_sla.subprocess_timeout_sec
+
+# FIX #3: DYNAMIC WORKER COUNT
+#   - Calculate optimal workers based on CPU count
+#   - Formula: min(cpu_count * 2, max_workers_limit)
+#   - Config: threading.max_workers
+
+# FIX #4: DETERMINISTIC DEMUCS OUTPUT PARSING
+#   - Sort output directories by mtime, take most recent
+#   - Validate vocals.wav exists
+#   - Prevents non-deterministic behavior
+#   - Config: demucs.validate_output
+
+# FIX #5: RATE LIMITING
+#   - Token bucket per IP address
+#   - Configurable per-minute and per-hour limits
+#   - Burst allowance for traffic spikes
+#   - Config: rate_limiting.*
+
+# FIX #6: SAFE LOGGING SETUP
+#   - Prevent duplicate log handlers
+#   - Check if handlers already exist before adding
+#   - Config: logging.prevent_duplicate_handlers
+
+# FIX #7: CIRCUIT BREAKER PATTERN
+#   - Prevent cascading failures
+#   - States: CLOSED → OPEN → HALF_OPEN → CLOSED
+#   - Per-component configuration
+#   - Config: circuit_breaker.*
+
+# FIX #8: SINGLE WORKER VALIDATION
+#   - CRITICAL: uvicorn workers must be 1
+#   - Models loaded at startup, shared across processes
+#   - Scale using Kubernetes instead
+#   - Config: deployment.workers = 1
+
+# FIX #9: REDIS QUEUE HANDLER
+#   - Async job queuing with Redis
+#   - Decouple request from processing
+#   - Worker service processes jobs separately
+#   - Config: redis.*, deployment.worker_*
+
+# FIX #10: CONFIG VALIDATION
+#   - Validate required config keys on startup
+#   - Check threshold ranges
+#   - Validate workers count
+#   - Config: validation.required_keys

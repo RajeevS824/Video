@@ -1,0 +1,343 @@
+#############################################################
+# DOCKERFILE - PRODUCTION v3.1
+#############################################################
+
+FROM python:3.10-slim
+
+WORKDIR /app
+
+# System dependencies
+RUN apt-get update && \
+    apt-get install -y ffmpeg redis-server && \
+    rm -rf /var/lib/apt/lists/*
+
+# Python dependencies
+COPY requirements_v3_1.txt .
+RUN pip install --no-cache-dir -r requirements_v3_1.txt
+
+# Copy application
+COPY pipeline_v3_1_production.py .
+COPY pipeline_advanced_utils.py .
+COPY config_v3_1_production.yaml ./config_v3.1.yaml
+COPY worker_service_v3_1.py .
+
+# Download models (optional - comment out if building with existing models)
+# RUN python -c "from pipeline_v3_1_production import model_cache"
+
+# Expose ports
+EXPOSE 8001 8000 6379
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD curl -f http://localhost:8001/health || exit 1
+
+# Run API
+CMD ["python", "pipeline_v3_1_production.py"]
+
+---
+
+#############################################################
+# DOCKER COMPOSE - COMPLETE STACK
+#############################################################
+
+version: '3.9'
+
+services:
+  # API Service
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.v3.1
+    container_name: audio-pipeline-api
+    ports:
+      - "8001:8001"
+    environment:
+      - REDIS_HOST=redis
+      - LOG_LEVEL=INFO
+    depends_on:
+      - redis
+    volumes:
+      - ./models:/app/models
+      - ./config_v3_1_production.yaml:/app/config_v3.1.yaml
+      - ./logs:/app/logs
+    restart: unless-stopped
+
+  # Worker Service
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.v3.1
+    container_name: audio-pipeline-worker
+    environment:
+      - REDIS_HOST=redis
+      - WORKER=true
+    depends_on:
+      - redis
+    volumes:
+      - ./models:/app/models
+      - ./config_v3_1_production.yaml:/app/config_v3.1.yaml
+      - ./logs:/app/logs
+    restart: unless-stopped
+    command: ["python", "worker_service_v3_1.py"]
+
+  # Redis Queue
+  redis:
+    image: redis:7-alpine
+    container_name: audio-pipeline-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+
+  # Prometheus (optional)
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: audio-pipeline-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    restart: unless-stopped
+
+  # Grafana (optional)
+  grafana:
+    image: grafana/grafana:latest
+    container_name: audio-pipeline-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+  prometheus-data:
+  grafana-data:
+
+---
+
+#############################################################
+# KUBERNETES DEPLOYMENT - audio-pipeline-api
+#############################################################
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: audio-pipeline-api
+  namespace: default
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: audio-pipeline-api
+  template:
+    metadata:
+      labels:
+        app: audio-pipeline-api
+    spec:
+      containers:
+      - name: api
+        image: audio-pipeline:3.1.0
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8001
+        
+        # Resource requests/limits
+        resources:
+          requests:
+            memory: "2Gi"
+            cpu: "1000m"
+          limits:
+            memory: "4Gi"
+            cpu: "2000m"
+        
+        # Health checks
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8001
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8001
+          initialDelaySeconds: 20
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 2
+        
+        # Environment
+        env:
+        - name: REDIS_HOST
+          value: "redis"
+        - name: LOG_LEVEL
+          value: "INFO"
+        
+        # Volume mounts
+        volumeMounts:
+        - name: models
+          mountPath: /app/models
+        - name: config
+          mountPath: /app/config_v3.1.yaml
+          subPath: config_v3.1.yaml
+      
+      # Volumes
+      volumes:
+      - name: models
+        persistentVolumeClaim:
+          claimName: audio-models-pvc
+      - name: config
+        configMap:
+          name: audio-pipeline-config
+
+---
+
+#############################################################
+# KUBERNETES SERVICE
+#############################################################
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: audio-pipeline-service
+spec:
+  type: LoadBalancer
+  selector:
+    app: audio-pipeline-api
+  ports:
+  - name: http
+    protocol: TCP
+    port: 80
+    targetPort: 8001
+
+---
+
+#############################################################
+# KUBERNETES CONFIGMAP
+#############################################################
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: audio-pipeline-config
+data:
+  config_v3.1.yaml: |
+    # Insert config_v3_1_production.yaml content here
+
+---
+
+#############################################################
+# KUBERNETES PERSISTENT VOLUME (Models)
+#############################################################
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: audio-models-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: standard
+  resources:
+    requests:
+      storage: 10Gi
+
+---
+
+#############################################################
+# KUBERNETES WORKER DEPLOYMENT
+#############################################################
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: audio-pipeline-worker
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: audio-pipeline-worker
+  template:
+    metadata:
+      labels:
+        app: audio-pipeline-worker
+    spec:
+      containers:
+      - name: worker
+        image: audio-pipeline:3.1.0
+        imagePullPolicy: IfNotPresent
+        
+        resources:
+          requests:
+            memory: "3Gi"
+            cpu: "1500m"
+          limits:
+            memory: "6Gi"
+            cpu: "3000m"
+        
+        env:
+        - name: REDIS_HOST
+          value: "redis"
+        - name: WORKER
+          value: "true"
+        
+        volumeMounts:
+        - name: models
+          mountPath: /app/models
+        - name: config
+          mountPath: /app/config_v3.1.yaml
+          subPath: config_v3.1.yaml
+      
+      volumes:
+      - name: models
+        persistentVolumeClaim:
+          claimName: audio-models-pvc
+      - name: config
+        configMap:
+          name: audio-pipeline-config
+
+---
+
+#############################################################
+# KUBERNETES HPA (Auto-Scaling)
+#############################################################
+
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: audio-pipeline-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: audio-pipeline-api
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
